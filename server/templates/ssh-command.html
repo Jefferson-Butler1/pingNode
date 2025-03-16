@@ -1,0 +1,29 @@
+<div class="space-y-4">
+  <h3 class="text-lg font-medium text-gray-900">SSH Command</h3>
+  
+  <div class="bg-gray-800 rounded-md p-4 flex items-center justify-between">
+    <code class="text-gray-100 font-mono flex-grow" id="ssh-command">{{ .Command }}</code>
+    <button 
+      class="ml-4 bg-green-500 hover:bg-green-600 text-white px-3 py-2 rounded text-sm"
+      onclick="copyCommand()"
+    >
+      Copy
+    </button>
+  </div>
+  
+  <div class="bg-blue-100 border-l-4 border-blue-500 text-blue-700 p-4 text-sm">
+    <p>This command will connect to your device via SSH.</p>
+  </div>
+  
+  <script>
+    function copyCommand() {
+      const command = document.getElementById('ssh-command').textContent;
+      navigator.clipboard.writeText(command).then(() => {
+        showCopyToast();
+      });
+    }
+    
+    // Make command display visible
+    document.getElementById('command-display').classList.remove('hidden');
+  </script>
+</div>

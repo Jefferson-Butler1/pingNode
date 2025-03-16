@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Device Tracker</title>
+  <!-- HTMX for interactive UI without complex JavaScript -->
+  <script src="https://unpkg.com/htmx.org@1.9.4"></script>
+  <!-- Tailwind CDN for quick styling -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    [x-cloak] { display: none !important; }
+  </style>
+</head>
+<body class="bg-gray-100 font-sans">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <div class="flex justify-between items-center mb-6">
+      <h1 class="text-2xl font-bold text-gray-900">Device Tracker</h1>
+      <div class="flex space-x-2">
+        <button
+          class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md shadow-sm"
+          hx-get="/"
+          hx-target="#device-table-container"
+          hx-swap="innerHTML"
+          hx-trigger="click"
+          hx-indicator="#refresh-indicator"
+        >
+          Refresh
+        </button>
+      </div>
+    </div>
+    
+    <!-- Refresh indicator -->
+    <div id="refresh-indicator" class="htmx-indicator fixed top-4 right-4 bg-white shadow-md rounded-md px-4 py-2 text-sm text-gray-700 flex items-center space-x-2">
+      <svg class="animate-spin h-5 w-5 text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+      </svg>
+      <span>Refreshing...</span>
+    </div>
+    
+    <!-- Success toast notification -->
+    <div id="copy-toast" class="fixed top-4 right-4 bg-green-500 text-white px-4 py-2 rounded-md shadow-md hidden">
+      Copied to clipboard!
+    </div>
+    
+    <!-- IP toggle button -->
+    <div class="flex justify-end mb-4">
+      <div class="inline-flex items-center">
+        <span class="mr-2 text-sm font-medium text-gray-700">IPv4</span>
+        <button
+          id="ip-toggle"
+          type="button"
+          class="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent bg-gray-200 transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:ring-offset-2"
+          onclick="toggleIPPreference()"
+        >
+          <span class="sr-only">Toggle IP preference</span>
+          <span
+            id="toggle-knob"
+            class="translate-x-0 pointer-events-none relative inline-block h-5 w-5 rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
+          >
+            <span
+              class="absolute inset-0 flex h-full w-full items-center justify-center transition-opacity"
+              aria-hidden="true"
+            ></span>
+          </span>
+        </button>
+        <span class="ml-2 text-sm font-medium text-gray-700">IPv6</span>
+        
+        <script>
+          let preferIPv6 = false;
+          
+          function toggleIPPreference() {
+            preferIPv6 = !preferIPv6;
+            const toggleKnob = document.getElementById('toggle-knob');
+            if (preferIPv6) {
+              toggleKnob.classList.remove('translate-x-0');
+              toggleKnob.classList.add('translate-x-5');
+              document.getElementById('ip-toggle').classList.add('bg-indigo-600');
+              document.getElementById('ip-toggle').classList.remove('bg-gray-200');
+            } else {
+              toggleKnob.classList.remove('translate-x-5');
+              toggleKnob.classList.add('translate-x-0');
+              document.getElementById('ip-toggle').classList.remove('bg-indigo-600');
+              document.getElementById('ip-toggle').classList.add('bg-gray-200');
+            }
+            
+            // Update all SSH command buttons
+            const sshButtons = document.querySelectorAll('[hx-get^="/ssh-command"]');
+            sshButtons.forEach(button => {
+              const url = new URL(button.getAttribute('hx-get'), window.location.origin);
+              url.searchParams.set('ipv6', preferIPv6);
+              button.setAttribute('hx-get', url.pathname + url.search);
+            });
+          }
+          
+          function showCopyToast() {
+            const toast = document.getElementById('copy-toast');
+            toast.classList.remove('hidden');
+            setTimeout(() => {
+              toast.classList.add('hidden');
+            }, 2000);
+          }
+        </script>
+      </div>
+    </div>
+    
+    <!-- Device table -->
+    <div id="device-table-container">
+      {{ template "device_table.html" . }}
+    </div>
+    
+    <!-- Command display area -->
+    <div id="command-display" class="mt-8 bg-white p-6 rounded-lg shadow-md hidden"></div>
+    
+    <!-- Auto-refresh -->
+    <div
+      hx-get="/"
+      hx-target="#device-table-container"
+      hx-trigger="every 60s"
+      hx-swap="innerHTML"
+      hx-indicator="#refresh-indicator"
+    ></div>
+
+    <div class="mt-10 text-center text-gray-500 text-sm">
+      IP Tracker • Refresh interval: 60s
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,94 @@
+<div class="bg-white overflow-hidden shadow-md rounded-lg">
+  <div class="overflow-x-auto">
+    <table class="min-w-full divide-y divide-gray-200">
+      <thead class="bg-gray-50">
+        <tr>
+          <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Device</th>
+          <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+          <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">IPv4</th>
+          <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">IPv6</th>
+          <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">User</th>
+          <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Update</th>
+          <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+        </tr>
+      </thead>
+      <tbody class="bg-white divide-y divide-gray-200">
+        {{$deviceCount := 0}}
+        {{range $hostname, $device := .}}
+        {{$deviceCount = add $deviceCount 1}}
+        <tr class="{{if even $deviceCount}}bg-gray-50{{end}}">
+          <td class="px-6 py-4 whitespace-nowrap">
+            <div class="flex items-center">
+              <div>
+                <div class="text-sm font-medium text-gray-900">
+                  {{if $device.ComputerName}}{{$device.ComputerName}}{{else}}{{$hostname}}{{end}}
+                </div>
+                <div class="text-sm text-gray-500">{{$hostname}}</div>
+              </div>
+            </div>
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap">
+            <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full 
+              {{if eq $device.SSHStatus "active"}}bg-green-100 text-green-800{{else}}bg-red-100 text-red-800{{end}}">
+              {{if eq $device.SSHStatus "active"}}Online{{else}}SSH Offline{{end}}
+            </span>
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+            {{if $device.IPv4Public}}
+            <div class="font-mono">{{$device.IPv4Public}}</div>
+            <div class="text-xs text-gray-400">Public</div>
+            {{end}}
+            {{if $device.IPv4Local}}
+            <div class="font-mono {{if $device.IPv4Public}}mt-1{{end}}">{{$device.IPv4Local}}</div>
+            <div class="text-xs text-gray-400">Local</div>
+            {{end}}
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+            {{if $device.IPv6Public}}
+            <div class="font-mono truncate max-w-[200px]" title="{{$device.IPv6Public}}">{{$device.IPv6Public}}</div>
+            <div class="text-xs text-gray-400">Public</div>
+            {{end}}
+            {{if $device.IPv6Local}}
+            <div class="font-mono truncate max-w-[200px] {{if $device.IPv6Public}}mt-1{{end}}" title="{{$device.IPv6Local}}">{{$device.IPv6Local}}</div>
+            <div class="text-xs text-gray-400">Local</div>
+            {{end}}
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+            {{$device.CurrentUser}}
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+            <div>{{$device.LastUpdate.Format "2006-01-02 15:04:05"}}</div>
+            <div class="text-xs text-gray-400">{{timeAgo $device.LastUpdate}}</div>
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+            {{if eq $device.SSHStatus "active"}}
+            <button
+              class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded"
+              hx-get="/ssh-command?hostname={{$hostname}}&ipv6=false"
+              hx-target="#command-display"
+              hx-swap="innerHTML"
+              hx-trigger="click"
+            >
+              SSH
+            </button>
+            {{else}}
+            <button
+              class="bg-gray-300 text-gray-700 font-bold py-2 px-4 rounded cursor-not-allowed"
+              disabled
+            >
+              SSH Offline
+            </button>
+            {{end}}
+          </td>
+        </tr>
+        {{else}}
+        <tr>
+          <td colspan="7" class="px-6 py-4 text-center text-gray-500">
+            No devices found. Run the client script to register a device.
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>

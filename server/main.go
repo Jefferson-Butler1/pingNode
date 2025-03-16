@@ -1,6 +1,7 @@
 package main
 
 import (
+	"embed"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -12,11 +13,18 @@ import (
 	"time"
 )
 
+// Embed templates only since static directory is empty
+//
+//go:embed templates/*.html
+var content embed.FS
+
 // DeviceInfo stores information about a device
 type DeviceInfo struct {
 	ComputerName  string    `json:"computerName"`
-	LocalIP       string    `json:"localIp"`
-	PublicIP      string    `json:"publicIp"`
+	IPv4Local     string    `json:"ipv4Local"`
+	IPv4Public    string    `json:"ipv4Public"`
+	IPv6Local     string    `json:"ipv6Local"`
+	IPv6Public    string    `json:"ipv6Public"`
 	SSHPort       string    `json:"sshPort"`
 	SSHStatus     string    `json:"sshStatus"`
 	CurrentUser   string    `json:"currentUser"`
@@ -29,8 +37,10 @@ type DeviceInfo struct {
 type DeviceUpdate struct {
 	Hostname     string `json:"hostname"`
 	ComputerName string `json:"computerName"`
-	LocalIP      string `json:"localIp"`
-	PublicIP     string `json:"publicIp"`
+	IPv4Local    string `json:"ipv4Local"`
+	IPv4Public   string `json:"ipv4Public"`
+	IPv6Local    string `json:"ipv6Local"`
+	IPv6Public   string `json:"ipv6Public"`
 	SSHPort      string `json:"sshPort"`
 	SSHStatus    string `json:"sshStatus"`
 	CurrentUser  string `json:"currentUser"`
@@ -39,11 +49,10 @@ type DeviceUpdate struct {
 
 // Server represents the IP tracker server
 type Server struct {
-	devices    map[string]DeviceInfo
-	dataFile   string
-	mutex      sync.RWMutex
-	htmlTmpl   *template.Template
-	tmplSource string
+	devices   map[string]DeviceInfo
+	dataFile  string
+	mutex     sync.RWMutex
+	templates *template.Template
 }
 
 // timeAgo formats a time value as a "time ago" string
@@ -74,24 +83,34 @@ func timeAgo(t time.Time) string {
 	return "just now"
 }
 
+// Helper functions for templates
+func add(a, b int) int {
+	return a + b
+}
+
+func even(a int) bool {
+	return a%2 == 0
+}
+
 func NewServer(dataFile string) *Server {
 	s := &Server{
-		devices:    make(map[string]DeviceInfo),
-		dataFile:   dataFile,
-		tmplSource: getHTMLTemplate(),
+		devices:  make(map[string]DeviceInfo),
+		dataFile: dataFile,
 	}
 
 	// Create template function map
 	funcMap := template.FuncMap{
 		"timeAgo": timeAgo,
+		"add":     add,
+		"even":    even,
 	}
 
-	// Parse HTML template with function map
-	var err error
-	s.htmlTmpl, err = template.New("index").Funcs(funcMap).Parse(s.tmplSource)
+	// Parse templates
+	tmpl, err := template.New("").Funcs(funcMap).ParseFS(content, "templates/*.html")
 	if err != nil {
-		log.Printf("Warning: Failed to parse HTML template: %v", err)
+		log.Printf("Warning: Failed to parse templates: %v", err)
 	}
+	s.templates = tmpl
 
 	// Load existing device data
 	s.loadDevices()
@@ -154,14 +173,24 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
-	if s.htmlTmpl != nil {
+	// Check if this is an HTMX request asking for just the table
+	if r.Header.Get("HX-Request") == "true" {
+		if err := s.templates.ExecuteTemplate(w, "device_table.html", s.devices); err != nil {
+			log.Printf("Error executing template: %v", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	// Otherwise, render the full page
+	if s.templates != nil {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := s.htmlTmpl.Execute(w, s.devices); err != nil {
+		if err := s.templates.ExecuteTemplate(w, "index.html", s.devices); err != nil {
 			log.Printf("Error executing template: %v", err)
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		}
 	} else {
-		// Fallback if template failed to parse
+		// Fallback if templates failed to parse
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(s.devices); err != nil {
 			log.Printf("Error encoding JSON: %v", err)
@@ -183,7 +212,8 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate required fields
-	if update.Hostname == "" || (update.LocalIP == "" && update.PublicIP == "") {
+	if update.Hostname == "" || (update.IPv4Local == "" && update.IPv4Public == "" &&
+		update.IPv6Local == "" && update.IPv6Public == "") {
 		http.Error(w, "Missing required fields: hostname and at least one IP", http.StatusBadRequest)
 		return
 	}
@@ -204,8 +234,10 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	s.mutex.Lock()
 	s.devices[update.Hostname] = DeviceInfo{
 		ComputerName:  update.ComputerName,
-		LocalIP:       update.LocalIP,
-		PublicIP:      update.PublicIP,
+		IPv4Local:     update.IPv4Local,
+		IPv4Public:    update.IPv4Public,
+		IPv6Local:     update.IPv6Local,
+		IPv6Public:    update.IPv6Public,
 		SSHPort:       update.SSHPort,
 		SSHStatus:     update.SSHStatus,
 		CurrentUser:   update.CurrentUser,
@@ -218,8 +250,9 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	// Save updated device data
 	go s.saveDevices()
 
-	log.Printf("Update received for %s: Local=%s, Public=%s, User=%s",
-		update.ComputerName, update.LocalIP, update.PublicIP, update.CurrentUser)
+	log.Printf("Update received for %s: IPv4=%s/%s, IPv6=%s/%s, User=%s",
+		update.ComputerName, update.IPv4Local, update.IPv4Public,
+		update.IPv6Local, update.IPv6Public, update.CurrentUser)
 
 	// Respond with success
 	w.Header().Set("Content-Type", "application/json")
@@ -261,18 +294,64 @@ func (s *Server) handleGetDevice(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func main() {
-	// Get port from environment variable or use default
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "3000"
+// Handler for SSH command fragment for HTMX
+func (s *Server) handleSSHCommand(w http.ResponseWriter, r *http.Request) {
+	hostname := r.FormValue("hostname")
+	preferIPv6 := r.FormValue("ipv6") == "true"
+
+	if hostname == "" {
+		http.Error(w, "Hostname required", http.StatusBadRequest)
+		return
 	}
 
-	// Get data file path from environment variable or use default
-	dataFile := os.Getenv("DATA_FILE")
-	if dataFile == "" {
-		dataFile = "devices.json"
+	s.mutex.RLock()
+	device, exists := s.devices[hostname]
+	s.mutex.RUnlock()
+
+	if !exists {
+		http.Error(w, "Device not found", http.StatusNotFound)
+		return
 	}
+
+	var ipToUse string
+
+	// Determine which IP to use based on preference and availability
+	if preferIPv6 && device.IPv6Public != "" {
+		ipToUse = device.IPv6Public
+	} else if device.IPv4Public != "" {
+		ipToUse = device.IPv4Public
+	} else if preferIPv6 && device.IPv6Local != "" {
+		ipToUse = device.IPv6Local
+	} else {
+		ipToUse = device.IPv4Local
+	}
+
+	sshCommand := fmt.Sprintf("ssh %s@%s", device.CurrentUser, ipToUse)
+	if device.SSHPort != "" && device.SSHPort != "22" {
+		sshCommand += fmt.Sprintf(" -p %s", device.SSHPort)
+	}
+
+	// Use template to render the command interface
+	if err := s.templates.ExecuteTemplate(w, "ssh_command.html", map[string]string{
+		"Command": sshCommand,
+	}); err != nil {
+		log.Printf("Error executing template: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	}
+}
+
+func getEnv(key, defaultValue string) string {
+	value, exists := os.LookupEnv(key)
+	if !exists {
+		value = defaultValue
+	}
+	return value
+}
+
+func main() {
+	// Get port from environment variable or use default
+	port := getEnv("PORT", "3000")
+	dataFile := getEnv("DATA_FILE", "devices.json")
 
 	// Create server
 	server := NewServer(dataFile)
@@ -282,230 +361,11 @@ func main() {
 	http.HandleFunc("/update", server.handleUpdate)
 	http.HandleFunc("/devices", server.handleListDevices)
 	http.HandleFunc("/devices/", server.handleGetDevice)
+	http.HandleFunc("/ssh-command", server.handleSSHCommand)
 
 	// Start server
 	log.Printf("Server starting on port %s", port)
 	if err := http.ListenAndServe(":"+port, nil); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
-}
-
-func getHTMLTemplate() string {
-	return `
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Device Tracker</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    body { font-family: Arial, sans-serif; max-width: 1000px; margin: 0 auto; padding: 20px; }
-    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-    th, td { padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }
-    th { background-color: #f2f2f2; }
-    .active { color: green; font-weight: bold; }
-    .inactive { color: red; }
-    .refresh { float: right; }
-    .connection-info { background-color: #f8f8f8; padding: 15px; border-radius: 5px; margin-top: 20px; }
-    .copy-btn {
-      background-color: #4CAF50;
-      color: white;
-      border: none;
-      padding: 5px 10px;
-      text-align: center;
-      text-decoration: none;
-      display: inline-block;
-      font-size: 14px;
-      margin: 4px 2px;
-      cursor: pointer;
-      border-radius: 4px;
-    }
-    .connect-btn {
-      background-color: #2196F3;
-      color: white;
-      border: none;
-      padding: 6px 12px;
-      border-radius: 4px;
-      cursor: pointer;
-    }
-    .cmd {
-      background-color: #333;
-      color: white;
-      padding: 10px;
-      border-radius: 4px;
-      font-family: monospace;
-      margin: 10px 0;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-    .cmd-text {
-      flex-grow: 1;
-    }
-    .copy-success {
-      background-color: #4CAF50;
-      color: white;
-      padding: 5px 10px;
-      border-radius: 4px;
-      position: fixed;
-      top: 20px;
-      right: 20px;
-      display: none;
-    }
-    .last-update {
-      font-size: 12px;
-      color: #666;
-    }
-  </style>
-</head>
-<body>
-  <h1>Device Tracker <button class="refresh" onclick="location.reload()">Refresh</button></h1>
-  <div id="copySuccess" class="copy-success">Copied to clipboard!</div>
-  
-  <table>
-    <tr>
-      <th>Device Name</th>
-      <th>Status</th>
-      <th>Public IP</th>
-      <th>Local IP</th>
-      <th>Current User</th>
-      <th>Last Update</th>
-      <th>Actions</th>
-    </tr>
-    {{range $hostname, $device := .}}
-    <tr>
-      <td>{{if $device.ComputerName}}{{$device.ComputerName}}{{else}}{{$hostname}}{{end}}</td>
-      <td class="{{if eq $device.SSHStatus "active"}}active{{else}}inactive{{end}}">
-        {{if eq $device.SSHStatus "active"}}Online{{else}}SSH Offline{{end}}
-      </td>
-      <td>{{$device.PublicIP}}</td>
-      <td>{{$device.LocalIP}}</td>
-      <td>{{$device.CurrentUser}}</td>
-      <td>
-        {{$device.LastUpdate.Format "2006-01-02 15:04:05"}}
-        <div class="last-update">{{timeAgo $device.LastUpdate}}</div>
-      </td>
-      <td>
-        {{if eq $device.SSHStatus "active"}}
-          <button class="connect-btn" onclick="copySSHCommand('{{$hostname}}')">Copy SSH Command</button>
-        {{else}}
-          <button class="connect-btn" onclick="showConnectionInfo('{{$hostname}}')">Connect</button>
-        {{end}}
-      </td>
-    </tr>
-    {{end}}
-  </table>
-  
-  <div id="connectionInfo" class="connection-info" style="display: none;"></div>
-  
-  <script>
-    function copyToClipboard(text) {
-      const el = document.createElement('textarea');
-      el.value = text;
-      document.body.appendChild(el);
-      el.select();
-      document.execCommand('copy');
-      document.body.removeChild(el);
-      
-      // Show success message
-      const successMsg = document.getElementById('copySuccess');
-      successMsg.style.display = 'block';
-      setTimeout(() => {
-        successMsg.style.display = 'none';
-      }, 2000);
-    }
-    
-    function copySSHCommand(hostname) {
-      const devices = {{.}};
-      const device = devices[hostname];
-      
-      if (!device) return;
-      
-      let sshCommand = '';
-      if (device.currentUser) {
-        sshCommand = 'ssh ' + device.currentUser + '@' + device.publicIp;
-        if (device.sshPort && device.sshPort !== '22') {
-          sshCommand += ' -p ' + device.sshPort;
-        }
-      } else {
-        sshCommand = 'ssh username@' + device.publicIp;
-        if (device.sshPort && device.sshPort !== '22') {
-          sshCommand += ' -p ' + device.sshPort;
-        }
-      }
-      
-      copyToClipboard(sshCommand);
-    }
-    
-    function showConnectionInfo(hostname) {
-      const devices = {{.}};
-      const device = devices[hostname];
-      const infoDiv = document.getElementById('connectionInfo');
-      
-      if (!device) {
-        infoDiv.textContent = 'Device information not found';
-        infoDiv.style.display = 'block';
-        return;
-      }
-      
-      let connectionInfo = '';
-      
-      // SSH Connection String
-      if (device.sshStatus === 'active') {
-        connectionInfo += '<h3>SSH Connection</h3>';
-        let sshCommand = '';
-        if (device.currentUser) {
-          sshCommand = 'ssh ' + device.currentUser + '@' + device.publicIp;
-          if (device.sshPort && device.sshPort !== '22') {
-            sshCommand += ' -p ' + device.sshPort;
-          }
-        } else {
-          sshCommand = 'ssh username@' + device.publicIp;
-          if (device.sshPort && device.sshPort !== '22') {
-            sshCommand += ' -p ' + device.sshPort;
-          }
-        }
-        connectionInfo += '<div class="cmd"><span class="cmd-text">' + sshCommand + '</span><button class="copy-btn" onclick="copyToClipboard(\'' + sshCommand + '\')">Copy</button></div>';
-        connectionInfo += '<small>Replace username with your macOS username if not shown</small>';
-      } else {
-        connectionInfo += '<h3>SSH appears to be offline on this device</h3>';
-      }
-      
-      // Remote Desktop Info
-      connectionInfo += '<h3>Screen Sharing (VNC)</h3>';
-      let vncCommand = 'vnc://' + device.publicIp;
-      connectionInfo += '<div class="cmd"><span class="cmd-text">' + vncCommand + '</span><button class="copy-btn" onclick="copyToClipboard(\'' + vncCommand + '\')">Copy</button></div>';
-      connectionInfo += '<p>In Finder, select Go > Connect to Server and paste the VNC address</p>';
-      
-      // Local Network Connection
-      connectionInfo += '<h3>Local Network Connection (if on same network)</h3>';
-      let localSshCommand = '';
-      if (device.currentUser) {
-        localSshCommand = 'ssh ' + device.currentUser + '@' + device.publicIp;
-        if (device.sshPort && device.sshPort !== '22') {
-          localSshCommand += ' -p ' + device.sshPort;
-        }
-      } else {
-        localSshCommand = 'ssh username@' + device.publicIp;
-        if (device.sshPort && device.sshPort !== '22') {
-          localSshCommand += ' -p ' + device.sshPort;
-        }
-      }
-      connectionInfo += '<div class="cmd"><span class="cmd-text">' + localSshCommand + '</span><button class="copy-btn" onclick="copyToClipboard(\'' + localSshCommand + '\')">Copy</button></div>';
-      
-      // Additional tips
-      connectionInfo += '<h3>Troubleshooting</h3>';
-      connectionInfo += '<p>If connection fails:</p>';
-      connectionInfo += '<ul>';
-      connectionInfo += '<li>Check if you\'re behind a NAT/firewall</li>';
-      connectionInfo += '<li>Set up port forwarding on your router for SSH and VNC</li>';
-      connectionInfo += '<li>Consider using a VPN or reverse SSH tunnel if direct connection fails</li>';
-      connectionInfo += '</ul>';
-      
-      infoDiv.innerHTML = connectionInfo;
-      infoDiv.style.display = 'block';
-    }
-  </script>
-</body>
-</html>
-`
 }
