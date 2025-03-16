@@ -1,30 +1,34 @@
 #!/bin/bash
 
 # Configuration
-SERVER_URL="http://127.0.0.1:3000/update"
+SERVER_URL="http://127.0.0.1:3000"
 LOG_FILE="$HOME/.ip_monitor.log"
 LAST_IP_FILE="$HOME/.last_ip"
 HOSTNAME=$(hostname)
 
-# Create a function to get the current primary IP address
+# Function to get the current primary IP address and public IP
 get_current_ip() {
   # Get active network service from scutil
   local active_service=$(scutil --nwi | grep "Network interfaces" -A 10 | grep -v "Network interfaces" | grep -v "^$" | head -1 | awk '{print $1}')
 
-  # Get IP address for the active service (handles both Wi-Fi and Ethernet)
-  local ip=$(ipconfig getifaddr $active_service 2>/dev/null)
+  # Get local IP address for the active service (handles both Wi-Fi and Ethernet)
+  local local_ip=$(ipconfig getifaddr $active_service 2>/dev/null)
 
   # If no IP found, try common interface names as fallback
-  if [ -z "$ip" ]; then
+  if [ -z "$local_ip" ]; then
     for interface in en0 en1 en2 en3; do
-      ip=$(ipconfig getifaddr $interface 2>/dev/null)
-      if [ -n "$ip" ]; then
+      local_ip=$(ipconfig getifaddr $interface 2>/dev/null)
+      if [ -n "$local_ip" ]; then
         break
       fi
     done
   fi
 
-  echo $ip
+  # Get public IP address
+  local public_ip=$(curl -s https://api.ipify.org 2>/dev/null || curl -s https://ifconfig.me 2>/dev/null || curl -s https://icanhazip.com 2>/dev/null)
+
+  # Return both IPs
+  echo "$local_ip,$public_ip"
 }
 
 # Function to send notification to server
@@ -56,7 +60,7 @@ notify_server() {
   echo "[$timestamp] Sending IP update: Local=$local_ip, Public=$public_ip" >>"$LOG_FILE"
 
   # Send HTTP request to server
-  curl -s -X POST "$SERVER_URL/update" \
+  curl -v -X POST "$SERVER_URL/update" \
     -H "Content-Type: application/json" \
     -d "{
             \"hostname\":\"$HOSTNAME\",
@@ -67,8 +71,7 @@ notify_server() {
             \"sshStatus\":\"$ssh_status\",
             \"currentUser\":\"$current_user\",
             \"timestamp\":\"$timestamp\"
-        }" \
-    -o /dev/null
+        }"
 
   # Store successful IP update
   echo "$ip_info" >"$LAST_IP_FILE"
@@ -81,6 +84,7 @@ fi
 
 # Get current IPs
 CURRENT_IP_INFO=$(get_current_ip)
+echo "Current IP info: $CURRENT_IP_INFO"
 IFS=',' read -r LOCAL_IP PUBLIC_IP <<<"$CURRENT_IP_INFO"
 
 # Get last reported IPs
@@ -89,8 +93,12 @@ if [ -f "$LAST_IP_FILE" ]; then
   LAST_IP_INFO=$(cat "$LAST_IP_FILE")
 fi
 
+echo "Local IP: $LOCAL_IP"
+echo "Public IP: $PUBLIC_IP"
+echo "Last IP info: $LAST_IP_INFO"
+
 # Only send notification if IP has changed or is new
-if [ -n "$LOCAL_IP" ] && [ -n "$PUBLIC_IP" ] && [ "$CURRENT_IP_INFO" != "$LAST_IP_INFO" ]; then
+if [ -n "$LOCAL_IP" ]; then
   notify_server "$CURRENT_IP_INFO"
 fi
 
